@@ -31,6 +31,8 @@ void ui_state_capture_visible_button(const bContext *C,
                                      const ui::Button *but,
                                      const rcti &rect);
 
+void ui_state_process_pending_commands(const bContext *C);
+
 void ui_state_record_button_dispatch_requested(const bContext *C, const ui::Button *but);
 
 void ui_state_record_afterfunc_dispatch(const bContext *C,

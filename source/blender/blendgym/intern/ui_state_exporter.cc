@@ -10,6 +10,9 @@
 #include <cstring>
 #include <initializer_list>
 #include <ios>
+#include <memory>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -20,6 +23,7 @@
 #include "BLI_fileops.hh"
 #include "BLI_path_utils.hh"
 #include "BLI_rect.hh"
+#include "BLI_serialize.hh"
 #include "BLI_string.hh"
 #include "BLI_string_ref.hh"
 #include "BLI_time.hh"
@@ -28,6 +32,9 @@
 
 #include "BKE_appdir.hh"
 #include "BKE_context.hh"
+#include "BKE_global.hh"
+
+#include "BLO_writefile.hh"
 
 #include "RNA_access.hh"
 
@@ -48,6 +55,7 @@ using ui::UI_SCROLLED;
 constexpr const char *BLENDGYM_STATE_DUMP_ENV = "BLENDGYM_STATE_DUMP";
 constexpr const char *BLENDGYM_STATE_FILE_ENV = "BLENDGYM_STATE_FILE";
 constexpr const char *BLENDGYM_DISPATCH_FILE_ENV = "BLENDGYM_DISPATCH_FILE";
+constexpr const char *BLENDGYM_COMMAND_FILE_ENV = "BLENDGYM_COMMAND_FILE";
 constexpr double CAPTURE_PASS_GAP_SECONDS = 0.05;
 
 struct RlActionSnapshot {
@@ -75,6 +83,15 @@ struct RlStateBuffer {
   Vector<RlActionSnapshot> actions;
   double last_capture_time = 0.0;
   int64_t pass_id = 0;
+  std::string last_command_id;
+};
+
+struct RlCommand {
+  std::string command_id;
+  std::string command;
+  std::string checkpoint_file;
+  std::string response_file;
+  std::string state_id;
 };
 
 RlStateBuffer &state_buffer()
@@ -355,6 +372,141 @@ void resolve_blendgym_filepath(char filepath[FILE_MAX], const char *env_key, con
     return;
   }
   BLI_path_join(filepath, FILE_MAX, BKE_tempdir_base(), "blendgym", "state", filename);
+}
+
+std::optional<std::string> lookup_string(const io::serialize::DictionaryValue &dict,
+                                         const StringRef key)
+{
+  const std::optional<StringRefNull> value = dict.lookup_str(key);
+  if (!value.has_value()) {
+    return std::nullopt;
+  }
+  return std::string(value->c_str());
+}
+
+std::optional<RlCommand> read_pending_command_from_file(const char *filepath)
+{
+  if (filepath == nullptr || filepath[0] == '\0' || !BLI_exists(filepath)) {
+    return std::nullopt;
+  }
+
+  blender::fstream file(filepath, std::ios::in);
+  if (!file.is_open()) {
+    return std::nullopt;
+  }
+
+  io::serialize::JsonFormatter formatter;
+  std::unique_ptr<io::serialize::Value> root = formatter.deserialize(file);
+  if (!root) {
+    return std::nullopt;
+  }
+
+  const io::serialize::DictionaryValue *dict = root->as_dictionary_value();
+  if (dict == nullptr) {
+    return std::nullopt;
+  }
+
+  RlCommand command;
+  command.command_id = lookup_string(*dict, "command_id").value_or("");
+  command.command = lookup_string(*dict, "command").value_or("");
+  command.checkpoint_file = lookup_string(*dict, "checkpoint_file").value_or("");
+  command.response_file = lookup_string(*dict, "response_file").value_or("");
+  command.state_id = lookup_string(*dict, "state_id").value_or("");
+
+  if (command.command_id.empty() || command.command.empty()) {
+    return std::nullopt;
+  }
+  return command;
+}
+
+std::string build_command_response_json(const RlCommand &command,
+                                        const bool ok,
+                                        const std::string &message)
+{
+  std::string out;
+  out += "{\n";
+  append_json_key_string(out, "schema", "blendgym.command_response.v0");
+  out += ",\n";
+  append_json_key_string(out, "command_id", command.command_id);
+  out += ",\n";
+  append_json_key_string(out, "command", command.command);
+  out += ",\n";
+  append_json_key_bool(out, "ok", ok);
+  out += ",\n";
+  append_json_key_double(out, "timestamp", BLI_time_now_seconds());
+  out += ",\n";
+  append_json_key_string(out, "state_id", command.state_id);
+  out += ",\n";
+  append_json_key_string(out, "checkpoint_file", command.checkpoint_file);
+  out += ",\n";
+  append_json_key_string(out, "message", message);
+  out += "\n}\n";
+  return out;
+}
+
+void write_command_response(const RlCommand &command, const bool ok, const std::string &message)
+{
+  if (command.response_file.empty()) {
+    return;
+  }
+  BLI_file_ensure_parent_dir_exists(command.response_file.c_str());
+  blender::fstream file(command.response_file, std::ios::out | std::ios::trunc);
+  if (!file.is_open()) {
+    return;
+  }
+  file << build_command_response_json(command, ok, message);
+}
+
+bool write_blend_checkpoint(const RlCommand &command, std::string &r_message)
+{
+  if (command.checkpoint_file.empty()) {
+    r_message = "missing checkpoint_file";
+    return false;
+  }
+  if (G_MAIN == nullptr) {
+    r_message = "G_MAIN is null";
+    return false;
+  }
+
+  BLI_file_ensure_parent_dir_exists(command.checkpoint_file.c_str());
+
+  BlendFileWriteParams params{};
+  params.remap_mode = BLO_WRITE_PATH_REMAP_RELATIVE;
+  params.use_save_versions = false;
+  params.use_save_as_copy = true;
+
+  const bool ok = BLO_write_file(G_MAIN, command.checkpoint_file.c_str(), G.fileflags, &params, nullptr);
+  r_message = ok ? "checkpoint written" : "BLO_write_file failed";
+  return ok;
+}
+
+void process_pending_command_if_needed(const bContext *C)
+{
+  if (!state_dump_enabled() || C == nullptr) {
+    return;
+  }
+
+  const char *command_filepath = BLI_getenv(BLENDGYM_COMMAND_FILE_ENV);
+  const std::optional<RlCommand> command = read_pending_command_from_file(command_filepath);
+  if (!command.has_value()) {
+    return;
+  }
+
+  RlStateBuffer &buffer = state_buffer();
+  if (buffer.last_command_id == command->command_id) {
+    return;
+  }
+  buffer.last_command_id = command->command_id;
+
+  bool ok = false;
+  std::string message;
+  if (command->command == "snapshot") {
+    ok = write_blend_checkpoint(*command, message);
+  }
+  else {
+    message = "unsupported command";
+  }
+  write_command_response(*command, ok, message);
 }
 
 void replace_or_append_action(RlStateBuffer &buffer, RlActionSnapshot action)
@@ -787,10 +939,17 @@ void ui_state_capture_visible_button(const bContext *C,
     return;
   }
 
+  process_pending_command_if_needed(C);
+
   RlStateBuffer &buffer = state_buffer();
   begin_new_capture_pass_if_needed(buffer);
   replace_or_append_action(buffer, action_from_button(C, region, block, but, rect));
   write_state_json(C, buffer);
+}
+
+void ui_state_process_pending_commands(const bContext *C)
+{
+  process_pending_command_if_needed(C);
 }
 
 void ui_state_record_button_dispatch_requested(const bContext *C, const ui::Button *but)
