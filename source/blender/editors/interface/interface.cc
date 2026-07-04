@@ -74,6 +74,7 @@
 
 #include "CLG_log.h"
 
+#include "BG_ui_state.hh"
 #include "interface_intern.hh"
 
 namespace blender::ui {
@@ -2337,6 +2338,7 @@ void block_draw(const bContext *C, Block *block)
     /* XXX: figure out why invalid coordinates happen when closing render window */
     /* and material preview is redrawn in main window (temp fix for bug #23848) */
     if (rect.xmin < rect.xmax && rect.ymin < rect.ymax) {
+      blendgym::ui_state_capture_visible_button(C, region, block, &but, rect);
       draw_button(C, region, &style, &but, &rect);
     }
   }

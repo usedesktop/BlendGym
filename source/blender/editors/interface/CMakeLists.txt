@@ -6,6 +6,7 @@ set(INC
   .
   ../asset
   ../include
+  ../../blendgym
   ../../animrig
   ../../makesrna
   ../../python
@@ -46,6 +47,7 @@ set(SRC
   interface_ops_color.cc
   interface_panel.cc
   interface_query.cc
+  ../../blendgym/intern/ui_state_exporter.cc
   regions/interface_region_color_picker.cc
   regions/interface_region_hud.cc
   regions/interface_region_menu_pie.cc
@@ -111,6 +113,7 @@ set(SRC
   buttons/interface_textbox.hh
   eyedroppers/eyedropper_intern.hh
   templates/interface_templates_intern.hh
+  ../../blendgym/BG_ui_state.hh
   interface_intern.hh
   regions/interface_regions_intern.hh
   view2d/view2d_intern.hh

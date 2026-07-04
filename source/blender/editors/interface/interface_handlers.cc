@@ -73,6 +73,7 @@
 #include "BPY_extern_run.hh"
 
 #include "buttons/interface_textbox.hh"
+#include "BG_ui_state.hh"
 #include "interface_intern.hh"
 
 #include "RNA_access.hh"
@@ -944,6 +945,7 @@ static bool afterfunc_check(const Block *block, const Button *but)
 static void apply_but_func(bContext *C, Button *but)
 {
   Block *block = but->block;
+  blendgym::ui_state_record_button_dispatch_requested(C, but);
   if (!afterfunc_check(block, but)) {
     return;
   }
@@ -1158,6 +1160,12 @@ static void apply_but_funcs_after(bContext *C)
       popup_check(C, after.popup_op);
     }
 
+    const char *operator_id = after.optype && after.optype->idname ? after.optype->idname : "";
+    const char *rna_struct = after.rnapoin.type ? RNA_struct_identifier(after.rnapoin.type) : "";
+    const char *rna_property = after.rnaprop ? RNA_property_identifier(after.rnaprop) : "";
+    bool operator_called = false;
+    bool rna_updated = false;
+
     PointerRNA opptr;
     if (after.opptr) {
       /* free in advance to avoid leak on exit */
@@ -1172,6 +1180,7 @@ static void apply_but_funcs_after(bContext *C)
                                                        (after.opptr) ? &opptr : nullptr,
                                                        nullptr,
                                                        after.drawstr);
+      operator_called = true;
     }
 
     if (after.opptr) {
@@ -1180,6 +1189,7 @@ static void apply_but_funcs_after(bContext *C)
 
     if (after.rnapoin.data) {
       RNA_property_update(C, &after.rnapoin, after.rnaprop);
+      rna_updated = true;
     }
 
     if (after.context) {
@@ -1230,6 +1240,15 @@ static void apply_but_funcs_after(bContext *C)
       }
       after.custom_interaction_handle = nullptr;
     }
+
+    blendgym::ui_state_record_afterfunc_dispatch(C,
+                                                 after.drawstr.c_str(),
+                                                 operator_id,
+                                                 int(after.opcontext),
+                                                 rna_struct,
+                                                 rna_property,
+                                                 operator_called,
+                                                 rna_updated);
 
     afterfunc_update_preferences_dirty(&after);
 
