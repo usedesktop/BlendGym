@@ -17,7 +17,10 @@
 #include <utility>
 
 #include "DNA_ID.h"
+#include "DNA_layer_types.h"
+#include "DNA_object_types.h"
 #include "DNA_screen_types.h"
+#include "DNA_scene_types.h"
 #include "DNA_workspace_types.h"
 
 #include "BLI_fileops.hh"
@@ -33,6 +36,7 @@
 #include "BKE_appdir.hh"
 #include "BKE_context.hh"
 #include "BKE_global.hh"
+#include "BKE_layer.hh"
 
 #include "BLO_writefile.hh"
 
@@ -630,6 +634,70 @@ void append_verifier_contract_json(std::string &out, const RlActionSnapshot &act
   out += "\n      }";
 }
 
+void append_scene_summary_json(std::string &out, const bContext *C)
+{
+  Scene *scene = C ? CTX_data_scene(C) : nullptr;
+  ViewLayer *view_layer = C ? CTX_data_view_layer(C) : nullptr;
+  Main *bmain = C ? CTX_data_main(C) : nullptr;
+  int object_count = 0;
+  int selected_object_count = 0;
+  constexpr int max_objects = 128;
+
+  if (bmain && scene && view_layer) {
+    BKE_view_layer_synced_ensure(*bmain, scene, view_layer);
+  }
+
+  Object *active_object = view_layer ? BKE_view_layer_active_object_get(view_layer) : nullptr;
+
+  out += "{\n    ";
+  append_json_key_string(out, "scene", id_name_or_empty(scene ? &scene->id : nullptr));
+  out += ",\n    ";
+  append_json_key_string(out, "view_layer", view_layer ? view_layer->name : "");
+  out += ",\n    ";
+  append_json_key_string(
+      out, "active_object", id_name_or_empty(active_object ? &active_object->id : nullptr));
+  out += ",\n    \"objects\": [\n";
+
+  ListBaseT<Base> *object_bases = view_layer ? BKE_view_layer_object_bases_get(view_layer) :
+                                               nullptr;
+  int emitted_count = 0;
+  for (Base *base = object_bases ? static_cast<Base *>(object_bases->first) : nullptr; base;
+       base = static_cast<Base *>(base->next))
+  {
+    Object *object = base->object;
+    if (object == nullptr) {
+      continue;
+    }
+
+    const bool selected = (base->flag & BASE_SELECTED) != 0;
+    object_count++;
+    selected_object_count += selected ? 1 : 0;
+
+    if (emitted_count >= max_objects) {
+      continue;
+    }
+
+    out += emitted_count == 0 ? "      {" : ",\n      {";
+    append_json_key_string(out, "name", id_name_or_empty(&object->id));
+    out += ", ";
+    append_json_key_int(out, "type", int(object->type));
+    out += ", ";
+    append_json_key_bool(out, "selected", selected);
+    out += ", ";
+    append_json_key_bool(out, "active", object == active_object);
+    out += "}";
+    emitted_count++;
+  }
+
+  out += "\n    ],\n    ";
+  append_json_key_int(out, "object_count", object_count);
+  out += ",\n    ";
+  append_json_key_int(out, "selected_object_count", selected_object_count);
+  out += ",\n    ";
+  append_json_key_int(out, "emitted_object_count", emitted_count);
+  out += "\n  }";
+}
+
 std::string instance_id_for_action(const bContext *C,
                                    const ARegion *region,
                                    const ui::Block &block,
@@ -748,6 +816,8 @@ std::string build_state_json(const bContext *C, const RlStateBuffer &buffer)
   append_json_key_int(out, "region_alignment", region ? region->alignment : -1);
   out += ",\n  ";
   append_json_key_int(out, "visible_action_count", int(buffer.actions.size()));
+  out += ",\n  \"scene\": ";
+  append_scene_summary_json(out, C);
   out += ",\n  \"visible_actions\": [\n";
 
   for (const int64_t i : buffer.actions.index_range()) {
