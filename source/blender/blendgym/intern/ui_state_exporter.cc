@@ -368,6 +368,18 @@ void append_json_key_double(std::string &out, const char *key, const double valu
   out += std::to_string(value);
 }
 
+void append_json_key_float3(std::string &out, const char *key, const float value[3])
+{
+  append_json_key(out, key);
+  out += "[";
+  out += std::to_string(double(value[0]));
+  out += ", ";
+  out += std::to_string(double(value[1]));
+  out += ", ";
+  out += std::to_string(double(value[2]));
+  out += "]";
+}
+
 void resolve_blendgym_filepath(char filepath[FILE_MAX], const char *env_key, const char *filename)
 {
   const char *override_filepath = BLI_getenv(env_key);
@@ -685,6 +697,14 @@ void append_scene_summary_json(std::string &out, const bContext *C)
     append_json_key_bool(out, "selected", selected);
     out += ", ";
     append_json_key_bool(out, "active", object == active_object);
+    out += ", ";
+    append_json_key_float3(out, "location", object->loc);
+    out += ", ";
+    append_json_key_float3(out, "rotation_euler", object->rot);
+    out += ", ";
+    append_json_key_float3(out, "scale", object->scale);
+    out += ", ";
+    append_json_key_int(out, "rotation_mode", int(object->rotmode));
     out += "}";
     emitted_count++;
   }
