@@ -21,6 +21,7 @@
 #include "DNA_object_types.h"
 #include "DNA_screen_types.h"
 #include "DNA_scene_types.h"
+#include "DNA_windowmanager_types.h"
 #include "DNA_workspace_types.h"
 
 #include "BLI_fileops.hh"
@@ -79,6 +80,15 @@ struct RlActionSnapshot {
   bool visible = true;
   bool enabled = false;
   std::string disabled_info;
+  std::string ui_context_id;
+  int window_id = 0;
+  std::string workspace_name;
+  std::string screen_name;
+  int area_space_type = -1;
+  rcti area_rect = {};
+  int region_type = -1;
+  int region_alignment = -1;
+  rcti region_rect = {};
   rcti bbox_px = {};
   rcti bbox_win_px = {};
 };
@@ -392,6 +402,108 @@ void append_json_key_float3(std::string &out, const char *key, const float value
   out += ", ";
   out += std::to_string(double(value[2]));
   out += "]";
+}
+
+void append_rect_json(std::string &out, const rcti &rect)
+{
+  out += "{";
+  append_json_key_int(out, "xmin", rect.xmin);
+  out += ", ";
+  append_json_key_int(out, "ymin", rect.ymin);
+  out += ", ";
+  append_json_key_int(out, "xmax", rect.xmax);
+  out += ", ";
+  append_json_key_int(out, "ymax", rect.ymax);
+  out += "}";
+}
+
+std::string rect_id_part(const rcti &rect)
+{
+  return std::to_string(rect.xmin) + "_" + std::to_string(rect.ymin) + "_" +
+         std::to_string(rect.xmax) + "_" + std::to_string(rect.ymax);
+}
+
+std::string ui_context_id_for_parts(const int window_id,
+                                    const std::string &workspace_name,
+                                    const std::string &screen_name,
+                                    const int area_space_type,
+                                    const rcti &area_rect,
+                                    const int region_type,
+                                    const int region_alignment,
+                                    const rcti &region_rect)
+{
+  std::string id = "blender.ui_context.window_";
+  id += std::to_string(window_id);
+  id += ".workspace_";
+  id += sanitize_id_part(workspace_name);
+  id += ".screen_";
+  id += sanitize_id_part(screen_name);
+  id += ".area_";
+  id += std::to_string(area_space_type);
+  id += "_";
+  id += rect_id_part(area_rect);
+  id += ".region_";
+  id += std::to_string(region_type);
+  id += "_";
+  id += std::to_string(region_alignment);
+  id += "_";
+  id += rect_id_part(region_rect);
+  return id;
+}
+
+void populate_ui_context(RlActionSnapshot &action, const bContext *C, const ARegion *region)
+{
+  const wmWindow *window = C ? CTX_wm_window(C) : nullptr;
+  const WorkSpace *workspace = C ? CTX_wm_workspace(C) : nullptr;
+  const bScreen *screen = C ? CTX_wm_screen(C) : nullptr;
+  const ScrArea *area = C ? CTX_wm_area(C) : nullptr;
+
+  action.window_id = window ? window->winid : 0;
+  action.workspace_name = id_name_or_empty(workspace ? &workspace->id : nullptr);
+  action.screen_name = id_name_or_empty(screen ? &screen->id : nullptr);
+  action.area_space_type = area ? int(area->spacetype) : -1;
+  action.area_rect = area ? area->totrct : rcti{};
+  action.region_type = region ? int(region->regiontype) : -1;
+  action.region_alignment = region ? int(region->alignment) : -1;
+  action.region_rect = region ? region->winrct : rcti{};
+  action.ui_context_id = ui_context_id_for_parts(action.window_id,
+                                                 action.workspace_name,
+                                                 action.screen_name,
+                                                 action.area_space_type,
+                                                 action.area_rect,
+                                                 action.region_type,
+                                                 action.region_alignment,
+                                                 action.region_rect);
+}
+
+void append_ui_context_json(std::string &out, const RlActionSnapshot &action)
+{
+  out += "{";
+  append_json_key_string(out, "context_id", action.ui_context_id);
+  out += ", ";
+  append_json_key_int(out, "window_id", action.window_id);
+  out += ", ";
+  append_json_key_string(out, "workspace", action.workspace_name);
+  out += ", ";
+  append_json_key_string(out, "screen", action.screen_name);
+  out += ", ";
+  append_json_key_int(out, "area_space_type", action.area_space_type);
+  out += ", \"area_rect\": ";
+  append_rect_json(out, action.area_rect);
+  out += ", ";
+  append_json_key_int(out, "region_type", action.region_type);
+  out += ", ";
+  append_json_key_int(out, "region_alignment", action.region_alignment);
+  out += ", \"region_rect\": ";
+  append_rect_json(out, action.region_rect);
+  out += "}";
+}
+
+void append_ui_context_json(std::string &out, const bContext *C, const ARegion *region)
+{
+  RlActionSnapshot context;
+  populate_ui_context(context, C, region);
+  append_ui_context_json(out, context);
 }
 
 void resolve_blendgym_filepath(char filepath[FILE_MAX], const char *env_key, const char *filename)
@@ -969,6 +1081,7 @@ RlActionSnapshot action_from_button(const bContext *C,
   if (region != nullptr) {
     BLI_rcti_translate(&action.bbox_win_px, region->winrct.xmin, region->winrct.ymin);
   }
+  populate_ui_context(action, C, region);
 
   if (but->optype != nullptr) {
     action.operator_id = but->optype->idname ? but->optype->idname : "";
@@ -1037,6 +1150,9 @@ std::string build_state_json(const bContext *C, const RlStateBuffer &buffer)
   out += ",\n  ";
   append_json_key_int(out, "region_alignment", region ? region->alignment : -1);
   out += ",\n  ";
+  out += "\"ui_context\": ";
+  append_ui_context_json(out, C, region);
+  out += ",\n  ";
   append_json_key_int(out, "visible_action_count", int(buffer.actions.size()));
   out += ",\n  \"scene\": ";
   append_scene_summary_json(out, C);
@@ -1062,6 +1178,9 @@ std::string build_state_json(const bContext *C, const RlStateBuffer &buffer)
     append_json_key_string(out, "disabled_info", action.disabled_info);
     out += ",\n      ";
     append_json_key_string(out, "block_name", action.block_name);
+    out += ",\n      ";
+    out += "\"ui_context\": ";
+    append_ui_context_json(out, action);
     out += ",\n      ";
     append_json_key_int(out, "block_flags", action.block_flags);
     out += ",\n      ";
@@ -1144,6 +1263,9 @@ std::string build_dispatch_event_json(const bContext *C,
   append_json_key_int(out, "area_space_type", area ? area->spacetype : -1);
   out += ",\n  ";
   append_json_key_int(out, "region_type", region ? region->regiontype : -1);
+  out += ",\n  ";
+  out += "\"ui_context\": ";
+  append_ui_context_json(out, C, region);
   out += ",\n  ";
   append_json_key_string(out, "catalog_id", action.catalog_id);
   out += ",\n  ";
