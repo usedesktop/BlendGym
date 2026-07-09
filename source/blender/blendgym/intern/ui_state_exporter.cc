@@ -350,6 +350,20 @@ void append_json_string_array(std::string &out, const std::initializer_list<cons
   out += "]";
 }
 
+void append_json_string_array(std::string &out, const Vector<std::string> &values)
+{
+  out += "[";
+  int index = 0;
+  for (const std::string &value : values) {
+    if (index > 0) {
+      out += ", ";
+    }
+    append_json_string(out, value);
+    index++;
+  }
+  out += "]";
+}
+
 void append_json_key_int(std::string &out, const char *key, const int value)
 {
   append_json_key(out, key);
@@ -595,6 +609,53 @@ std::string verifier_contract_kind_for_action(const RlActionSnapshot &action)
   return "ui_button";
 }
 
+void append_unique_verifier_id(Vector<std::string> &ids, const std::string &id)
+{
+  if (id.empty()) {
+    return;
+  }
+  for (const std::string &known_id : ids) {
+    if (known_id == id) {
+      return;
+    }
+  }
+  ids.append(id);
+}
+
+Vector<std::string> verifier_ids_for_action(const RlActionSnapshot &action,
+                                            const std::string &action_id)
+{
+  const std::string contract_kind = verifier_contract_kind_for_action(action);
+  Vector<std::string> ids;
+
+  if (!action.catalog_id.empty()) {
+    append_unique_verifier_id(ids, "catalog.known:" + action.catalog_id);
+  }
+
+  append_unique_verifier_id(ids, "ui.visible:" + action_id);
+  append_unique_verifier_id(ids, "ui.enabled:" + action_id);
+
+  if (contract_kind == "workspace_tab" && !action.label.empty()) {
+    append_unique_verifier_id(ids, "workspace.active:" + action.label);
+  }
+  if (!action.operator_id.empty()) {
+    append_unique_verifier_id(ids, "operator.invoked:" + action.operator_id);
+  }
+  if (!action.rna_struct.empty() && !action.rna_property.empty()) {
+    append_unique_verifier_id(
+        ids, "rna.updated:" + action.rna_struct + "." + action.rna_property);
+  }
+
+  return ids;
+}
+
+void append_verifier_ids_json(std::string &out,
+                              const RlActionSnapshot &action,
+                              const std::string &action_id)
+{
+  append_json_string_array(out, verifier_ids_for_action(action, action_id));
+}
+
 void append_verifier_primitives(std::string &out, const std::string &contract_kind)
 {
   if (contract_kind == "workspace_tab") {
@@ -641,7 +702,7 @@ void append_verifier_contract_json(std::string &out, const RlActionSnapshot &act
   const std::string contract_kind = verifier_contract_kind_for_action(action);
   out += "{\n        ";
   append_json_key_string(out, "kind", contract_kind);
-  out += ",\n        \"required_primitives\": ";
+  out += ",\n        \"candidate_primitives\": ";
   append_verifier_primitives(out, contract_kind);
   out += "\n      }";
 }
@@ -876,6 +937,11 @@ std::string build_state_json(const bContext *C, const RlStateBuffer &buffer)
     append_json_key_int(out, "rna_index", action.rna_index);
     out += ",\n      \"verifier_contract\": ";
     append_verifier_contract_json(out, action);
+    out += ",\n      \"verifier_ids\": ";
+    append_verifier_ids_json(
+        out, action, action.instance_id.empty() ? action.catalog_id : action.instance_id);
+    out += ",\n      \"catalog_verifier_ids\": ";
+    append_verifier_ids_json(out, action, action.catalog_id);
     out += ",\n      \"bbox_px\": {";
     append_json_key_int(out, "xmin", action.bbox_px.xmin);
     out += ", ";
@@ -911,7 +977,6 @@ std::string build_dispatch_event_json(const bContext *C,
   const bScreen *screen = CTX_wm_screen(C);
   const ScrArea *area = CTX_wm_area(C);
   const ARegion *region = CTX_wm_region_popup(C) ? CTX_wm_region_popup(C) : CTX_wm_region(C);
-  const std::string contract_kind = verifier_contract_kind_for_action(action);
 
   std::string out;
   out.reserve(2048);
@@ -961,6 +1026,11 @@ std::string build_dispatch_event_json(const bContext *C,
   append_json_key_bool(out, "rna_updated", rna_updated);
   out += ",\n  \"verifier_contract\": ";
   append_verifier_contract_json(out, action);
+  out += ",\n  \"verifier_ids\": ";
+  append_verifier_ids_json(
+      out, action, action.instance_id.empty() ? action.catalog_id : action.instance_id);
+  out += ",\n  \"catalog_verifier_ids\": ";
+  append_verifier_ids_json(out, action, action.catalog_id);
   out += ",\n  \"bbox_px\": {";
   append_json_key_int(out, "xmin", action.bbox_px.xmin);
   out += ", ";
