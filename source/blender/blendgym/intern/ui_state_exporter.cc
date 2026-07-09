@@ -656,6 +656,147 @@ void append_verifier_ids_json(std::string &out,
   append_json_string_array(out, verifier_ids_for_action(action, action_id));
 }
 
+void append_verifier_binding_json(std::string &out,
+                                  const char *primitive,
+                                  const std::string &verifier_id,
+                                  const char *scope,
+                                  const char *phase,
+                                  const bool required)
+{
+  out += "{";
+  append_json_key_string(out, "primitive", primitive ? primitive : "");
+  out += ", ";
+  append_json_key_string(out, "verifier_id", verifier_id);
+  out += ", ";
+  append_json_key_string(out, "scope", scope ? scope : "");
+  out += ", ";
+  append_json_key_string(out, "phase", phase ? phase : "");
+  out += ", ";
+  append_json_key_string(out, "kind", "boolean");
+  out += ", ";
+  append_json_key_bool(out, "required", required);
+  out += "}";
+}
+
+void append_verifier_binding(Vector<std::string> &seen_ids,
+                             std::string &out,
+                             int &count,
+                             const char *primitive,
+                             const std::string &verifier_id,
+                             const char *scope,
+                             const char *phase,
+                             const bool required)
+{
+  if (verifier_id.empty()) {
+    return;
+  }
+  for (const std::string &known_id : seen_ids) {
+    if (known_id == verifier_id) {
+      return;
+    }
+  }
+  seen_ids.append(verifier_id);
+  if (count > 0) {
+    out += ", ";
+  }
+  append_verifier_binding_json(out, primitive, verifier_id, scope, phase, required);
+  count++;
+}
+
+void append_verifier_bindings_json(std::string &out,
+                                   const RlActionSnapshot &action,
+                                   const std::string &action_id)
+{
+  const std::string contract_kind = verifier_contract_kind_for_action(action);
+  Vector<std::string> seen_ids;
+  int count = 0;
+
+  out += "[";
+  if (!action.catalog_id.empty()) {
+    append_verifier_binding(seen_ids,
+                            out,
+                            count,
+                            "catalog.known",
+                            "catalog.known:" + action.catalog_id,
+                            "catalog",
+                            "precondition",
+                            true);
+  }
+
+  if (!action_id.empty()) {
+    append_verifier_binding(seen_ids,
+                            out,
+                            count,
+                            "ui.visible",
+                            "ui.visible:" + action_id,
+                            "recording",
+                            "recording_precondition",
+                            false);
+    append_verifier_binding(seen_ids,
+                            out,
+                            count,
+                            "ui.enabled",
+                            "ui.enabled:" + action_id,
+                            "recording",
+                            "recording_precondition",
+                            false);
+  }
+
+  if (!action_id.empty() && contract_kind != "text_input") {
+    append_verifier_binding(seen_ids,
+                            out,
+                            count,
+                            "ui.hit_bbox",
+                            "ui.hit_bbox:" + action_id,
+                            "recording",
+                            "recording_evidence",
+                            false);
+  }
+
+  if (!action_id.empty()) {
+    append_verifier_binding(seen_ids,
+                            out,
+                            count,
+                            "ui.invoked",
+                            "ui.invoked:" + action_id,
+                            "recording",
+                            "recording_evidence",
+                            false);
+  }
+
+  if (contract_kind == "workspace_tab" && !action.label.empty()) {
+    append_verifier_binding(seen_ids,
+                            out,
+                            count,
+                            "workspace.active",
+                            "workspace.active:" + action.label,
+                            "workspace",
+                            "postcondition",
+                            true);
+  }
+  if (!action.operator_id.empty()) {
+    append_verifier_binding(seen_ids,
+                            out,
+                            count,
+                            "operator.invoked",
+                            "operator.invoked:" + action.operator_id,
+                            "operator",
+                            "postcondition",
+                            true);
+  }
+  if (!action.rna_struct.empty() && !action.rna_property.empty()) {
+    append_verifier_binding(seen_ids,
+                            out,
+                            count,
+                            "rna.updated",
+                            "rna.updated:" + action.rna_struct + "." + action.rna_property,
+                            "rna",
+                            "postcondition",
+                            true);
+  }
+  out += "]";
+}
+
 void append_verifier_primitives(std::string &out, const std::string &contract_kind)
 {
   if (contract_kind == "workspace_tab") {
@@ -942,6 +1083,11 @@ std::string build_state_json(const bContext *C, const RlStateBuffer &buffer)
         out, action, action.instance_id.empty() ? action.catalog_id : action.instance_id);
     out += ",\n      \"catalog_verifier_ids\": ";
     append_verifier_ids_json(out, action, action.catalog_id);
+    out += ",\n      \"verifier_bindings\": ";
+    append_verifier_bindings_json(
+        out, action, action.instance_id.empty() ? action.catalog_id : action.instance_id);
+    out += ",\n      \"catalog_verifier_bindings\": ";
+    append_verifier_bindings_json(out, action, action.catalog_id);
     out += ",\n      \"bbox_px\": {";
     append_json_key_int(out, "xmin", action.bbox_px.xmin);
     out += ", ";
@@ -1031,6 +1177,11 @@ std::string build_dispatch_event_json(const bContext *C,
       out, action, action.instance_id.empty() ? action.catalog_id : action.instance_id);
   out += ",\n  \"catalog_verifier_ids\": ";
   append_verifier_ids_json(out, action, action.catalog_id);
+  out += ",\n  \"verifier_bindings\": ";
+  append_verifier_bindings_json(
+      out, action, action.instance_id.empty() ? action.catalog_id : action.instance_id);
+  out += ",\n  \"catalog_verifier_bindings\": ";
+  append_verifier_bindings_json(out, action, action.catalog_id);
   out += ",\n  \"bbox_px\": {";
   append_json_key_int(out, "xmin", action.bbox_px.xmin);
   out += ", ";
